@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import BankingSystem from "./banking-system.js";
+import BankingSystem from "./bankingSystem.js";
 
 describe("BankingSystem", () => {
   it("creates accounts and rejects duplicate account ids", () => {
