@@ -19,6 +19,11 @@ type BankingEvent =
       amount: number;
     }
   | {
+      event: "get_balance";
+      accountId: number;
+      timestamp: number;
+    }
+  | {
       event: "bad_event";
     };
 
@@ -89,6 +94,19 @@ const ingestor = new ReliableMessageIngestor<BankingEvent>(
         return;
       }
 
+      case "get_balance": {
+        const balance = bank.getBalanceAt(payload.accountId, payload.timestamp + 1);
+        if (balance === null) throw new Error("get_balance failed");
+
+        console.log("processed get_balance", {
+          messageId: message.id,
+          accountId: payload.accountId,
+          timestamp: payload.timestamp,
+          balance,
+        });
+        return;
+      }
+
       case "bad_event":
         throw new Error("bad event failed");
     }
@@ -136,6 +154,11 @@ ingestor.ingest({
 ingestor.ingest({
   id: "msg_1",
   payload: { event: "deposit", accountId: 1, amount: 999 },
+});
+
+ingestor.ingest({
+  id: "msg_5",
+  payload: { event: "get_balance", accountId: 1, timestamp: Date.now() },
 });
 
 const drained = await ingestor.stopAndDrain(5_000);
