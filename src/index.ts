@@ -1,4 +1,5 @@
 import BankingSystem from "./bankingSystem.js";
+import { FileCache } from "./fileCacheSystem.js";
 import { ReliableMessageIngestor } from "./messageIngestor.js";
 
 type BankingEvent =
@@ -28,6 +29,46 @@ type BankingEvent =
     };
 
 const bank = new BankingSystem();
+const fileCache = new FileCache({
+  maxBytes: 10_000,
+  defaultTTLMs: 30_000,
+});
+
+const decoder = new TextDecoder();
+
+function cacheJson(fileId: string, value: unknown, ttlMs?: number): void {
+  const cached = fileCache.put(fileId, JSON.stringify(value), ttlMs);
+  if (!cached) {
+    console.log("cache skipped", { fileId });
+  }
+}
+
+function readCachedJson<T>(fileId: string): T | null {
+  const cached = fileCache.get(fileId);
+  return cached ? (JSON.parse(decoder.decode(cached)) as T) : null;
+}
+
+function balanceCacheKey(accountId: number, timestamp: number): string {
+  return `balance:${accountId}:${timestamp}`;
+}
+
+function getCachedBalance(accountId: number, timestamp: number): number | null {
+  const fileId = balanceCacheKey(accountId, timestamp);
+  const cachedBalance = readCachedJson<number>(fileId);
+
+  if (cachedBalance !== null) {
+    console.log("balance cache hit", { fileId, cachedBalance });
+    return cachedBalance;
+  }
+
+  const balance = bank.getBalanceAt(accountId, timestamp);
+  if (balance !== null) {
+    cacheJson(fileId, balance, 10_000);
+    console.log("balance cache miss; stored result", { fileId, balance });
+  }
+
+  return balance;
+}
 
 bank.createAccount(1, "Alice");
 bank.createAccount(2, "Bob");
@@ -95,7 +136,7 @@ const ingestor = new ReliableMessageIngestor<BankingEvent>(
       }
 
       case "get_balance": {
-        const balance = bank.getBalanceAt(payload.accountId, payload.timestamp + 1);
+        const balance = getCachedBalance(payload.accountId, payload.timestamp + 1);
         if (balance === null) throw new Error("get_balance failed");
 
         console.log("processed get_balance", {
@@ -163,13 +204,19 @@ ingestor.ingest({
 
 const drained = await ingestor.stopAndDrain(5_000);
 
-console.log("drained", drained);
-console.log("stats", ingestor.getStats());
-console.log("deadLetters", ingestor.getDeadLetters());
-console.log("finalState", {
-  aliceBalance: bank.getBalanceAt(1, Date.now()),
-  bobBalance: bank.getBalanceAt(2, Date.now()),
+const finalState = {
+  aliceBalance: getCachedBalance(1, Date.now()),
+  bobBalance: getCachedBalance(2, Date.now()),
   aliceTransactions: bank.getTransactionHistory(1),
   bobTransactions: bank.getTransactionHistory(2),
   topSpenders: bank.getTopSpenders(5),
-});
+};
+
+cacheJson("banking:final-state", finalState);
+
+console.log("drained", drained);
+console.log("stats", ingestor.getStats());
+console.log("deadLetters", ingestor.getDeadLetters());
+console.log("finalState", finalState);
+console.log("cachedFinalState", readCachedJson("banking:final-state"));
+console.log("cacheStats", fileCache.getStats());
